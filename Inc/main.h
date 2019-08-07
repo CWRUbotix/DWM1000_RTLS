@@ -34,6 +34,7 @@ extern "C" {
 /* USER CODE BEGIN Includes */
 #include <inttypes.h>
 #include "deca_types.h"
+#include "deca_mac.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -109,7 +110,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 void debug(UART_HandleTypeDef* huart, char* text);
-RangingStatus range_with_anchor(uint8_t anchor_id, AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps);
+RangingStatus range_with_anchor(uint8_t anchor_id, AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps, uint8* seq_num);
 unsigned long long get_tx_timestamp(void);
 unsigned long long get_rx_timestamp(void);
 TxStatus transmit_frame(uint8* frame, int f_len, _Bool ranging);

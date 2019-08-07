@@ -43,12 +43,13 @@
 
 #define FRAME_LEN_MAX 		127
 
-#define NUMBER_OF_ANCHORS 	1
+#define NUMBER_OF_ANCHORS 	3
 
-#define DELAY_BEFORE_TX 	1
+#define DELAY_BEFORE_TX 	0
 
+#define SAMPLES_PER_POINT 	3
 /* Change to match the device you're programming */
-#define XTAL_TRIM 			15
+#define XTAL_TRIM 			14
 
 /* Change to match which device you're programming */
 #define TX_ANT_DLY 			16442
@@ -57,8 +58,14 @@
 #define SELF_CAN_ID 		0x01
 
 #ifdef ANCHOR
-/* ID of this anchor, change to be unique in the system */
-#define SELF_ID 			0x11
+/* ID of this device, change to be unique in the system */
+#define SELF_ID 			0x33
+#endif
+
+#ifdef BEACON
+
+/* ID of this device will be the CAN bus id, because why not */
+#define SELF_ID 			SELF_CAN_ID
 #endif
 /* USER CODE END PD */
 
@@ -105,11 +112,17 @@ _Bool 			do_ranging 					= 0;
 _Bool 			dwm1000_setup_success 		= 0;
 AnchorTimeStamps anchor_stamps;
 BeaconTimeStamps beacon_stamps;
+uint8 			sequence_num 				= 0;
 unsigned long long t_sp, t_rr, t_sf, t_rp, t_sr, t_rf;
 ///* Buffer to store received frame. See NOTE 1 below. */
 static uint8 tx_buffer[FRAME_LEN_MAX];
 static uint8 rx_buffer[FRAME_LEN_MAX];
 static uint8 uCurrentTrim_val;
+
+#ifdef ANCHOR
+uint16 src_address;
+uint16 src_panid;
+#endif
 
 
 /* USER CODE END PV */
@@ -168,7 +181,18 @@ int main(void)
 #ifdef BEACON
   /* Enable CAN interrupt */
 //    HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
+  CAN_FilterTypeDef  can_filter;
+  can_filter.FilterFIFOAssignment = CAN_RX_FIFO0;
+  can_filter.FilterMode = CAN_FILTERMODE_IDMASK;
+  can_filter.FilterScale = CAN_FILTERSCALE_32BIT;
+  can_filter.FilterIdHigh = 0x0000;
+  can_filter.FilterIdLow = 0x0000;
+  can_filter.FilterMaskIdHigh = 0x0000;
+  can_filter.FilterMaskIdLow = 0x0000;
+  can_filter.FilterBank = 0;
+  can_filter.FilterActivation = CAN_FILTER_ENABLE;
 
+  HAL_CAN_ConfigFilter(&hcan, &can_filter);
   /* Start the CAN Module */
     HAL_CAN_Start(&hcan);
 
@@ -208,6 +232,13 @@ int main(void)
     dwt_setrxantennadelay(RX_ANT_DLY);
     dwt_settxantennadelay(TX_ANT_DLY);
 
+
+    self_pan_id 	= SELF_ID;
+    self_address 	= SELF_ID;
+    dwt_setpanid(self_pan_id);
+    dwt_setaddress16(self_address);	// why not just have ADDRESS == PAN_ID ?
+
+    dwt_enableframefilter(DWT_FF_DATA_EN); // permit DATA frame types
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -221,7 +252,7 @@ int main(void)
   		uint32_t can_frame_available = HAL_CAN_GetRxFifoFillLevel(&hcan, CAN_RX_FIFO0);
 
   		if(can_frame_available > 0){
-  			debug(&huart1, "CAN Frame received\r");
+//  			debug(&huart1, "CAN Frame received\r");
   			CAN_RxHeaderTypeDef hddr;
   			uint8_t data[8];
   			CAN_status = HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &hddr, data);
@@ -240,35 +271,30 @@ int main(void)
 
   			for (int i = 0; i < NUMBER_OF_ANCHORS; i++){
   				DistanceFrame* anchor = &(anchors[i]);
-  				int tof1, tof2, tof3;
+  				int tofs[SAMPLES_PER_POINT];
+  				_Bool ranging_ok = 1;
 
-  				ranging_status = range_with_anchor(anchor->anchor_id, &anchor_stamps, &beacon_stamps);
-  				if(ranging_status == RANGING_SUCCESS){
-  					tof1 = get_tof(&anchor_stamps, &beacon_stamps);
+  				for(int j = 0; j < SAMPLES_PER_POINT; j++){
+  					ranging_status = range_with_anchor(anchor->anchor_id, &anchor_stamps, &beacon_stamps, &sequence_num);
+  					if(ranging_status != RANGING_SUCCESS){
+  						ranging_ok = 0;
+  						break;
+  					}
+  					tofs[j] = get_tof(&anchor_stamps, &beacon_stamps);
+  					HAL_Delay(10);
   				}
-//  				HAL_Delay(1);
-//
-//  				ranging_status = range_with_anchor(anchor->anchor_id, &anchor_stamps, &beacon_stamps);
-//  				if(ranging_status == RANGING_SUCCESS){
-//  					tof2 = get_tof(&anchor_stamps, &beacon_stamps);
-//  				}
-//  				HAL_Delay(1);
-//
-//  				ranging_status = range_with_anchor(anchor->anchor_id, &anchor_stamps, &beacon_stamps);
-//  				if(ranging_status == RANGING_SUCCESS){
-//  					tof3 = get_tof(&anchor_stamps, &beacon_stamps);
-//  				}
 
-  				if(ranging_status == RANGING_SUCCESS){
-  					// calculate distance
-//  					int round1 	= (beacon_stamps.t_rr - beacon_stamps.t_sp);
-//  					int reply1 	= (anchor_stamps.t_sr - anchor_stamps.t_rp);
-//  					int round2 	= (anchor_stamps.t_rf - anchor_stamps.t_sr);
-//  					int reply2 	= (beacon_stamps.t_sf - beacon_stamps.t_rr);
-
-  					int tof 	= tof1;//(tof1 + tof2 + tof3) / 3; //((round1 - reply1) + (round2 - reply2)) / 4; //tof_dwtu / (128.0*499200000.0);
+  				if(ranging_ok){
+  					int sum = 0;
+  					for(int i = 0; i < SAMPLES_PER_POINT; i++){
+  						sum += tofs[i];
+  					}
+  					int tof 	= sum / SAMPLES_PER_POINT;
 
   					float dist 	= 299792458.0 * (1.0*tof / (128.0*499200000.0));
+
+  					size = sprintf((char*)uart_buf, "Anchor %x,\t", anchor->anchor_id);
+  					UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
 
   					size = sprintf((char*)uart_buf, "ToF Counts: %d\t", tof);
   					UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
@@ -292,7 +318,7 @@ int main(void)
   					anchor->type = DISTANCE_FRAME_TYPE;
   					anchor->distance = -1.0;
   					_Bool can_success = send_CAN_update(&hcan, anchor);
-
+  		  			HAL_Delay(250);
   				}
   			}
   			do_ranging = 0;
@@ -306,39 +332,48 @@ int main(void)
 
 #ifdef ANCHOR
 
-  		 int rcv_len = receive_frame(rx_buffer, FRAME_LEN_MAX, 50);
-  		 if(rcv_len >= 0){
-  			 if(rx_buffer[0] == SELF_ID){
-  				 switch(rx_buffer[1]){
-  				 case POLL:{
-  					 anchor_stamps.t_rp = get_rx_timestamp();
+  		 int rcv_len = receive_frame(rx_buffer, FRAME_LEN_MAX, 500);
+  		 if(rcv_len > 0){
+  			 switch(rx_buffer[MAC_SIZE_EXPECTED]){
+  			 case POLL:{
+  				 anchor_stamps.t_rp = get_rx_timestamp();
 
-  					 tx_buffer[0] = SELF_ID;
-  					 tx_buffer[1] = RESPONSE_INIT;
-  					 HAL_Delay(DELAY_BEFORE_TX);
-  					 transmit_frame(tx_buffer, 4, 1);
+  				 src_address 	= get_src_addr(rx_buffer);
+  				 src_panid 		= get_src_panid(rx_buffer);
+  				 sequence_num 	= get_seq_number(rx_buffer);
+  				 uint8 data_len = make_mac_header(tx_buffer, src_address, src_panid, ++sequence_num);
+  				 tx_buffer[data_len++] = RESPONSE_INIT;
+  				 HAL_Delay(DELAY_BEFORE_TX);
+  				 transmit_frame(tx_buffer, data_len + 2, 1); // +2 to account for checksum
 
-  					 anchor_stamps.t_sr = get_tx_timestamp();
-//  					 dwt_rxreset();
-  					 break;}
-  				 case SEND_FINAL:{
-  					 anchor_stamps.t_rf = get_rx_timestamp();
+  				 anchor_stamps.t_sr = get_tx_timestamp();
+  				 //  					 dwt_rxreset();
+  				 break;}
+  			 case SEND_FINAL:{
+  				 anchor_stamps.t_rf = get_rx_timestamp();
 
-  					 tx_buffer[0] = SELF_ID;
-  					 tx_buffer[1] = RESPONSE_DATA;
+  				 uint16 new_src_addr 	= get_src_addr(rx_buffer);
+  				 uint16 new_src_panid 	= get_src_panid(rx_buffer);
+  				 uint8 new_seq_num 		= get_seq_number(rx_buffer);
+  				 if(new_src_addr == src_address && new_src_panid == src_panid){
+  					 sequence_num = new_seq_num;
+  					 uint8 data_len = make_mac_header(tx_buffer, src_address, src_panid, ++sequence_num);
+  					 tx_buffer[data_len++] = RESPONSE_DATA;
+  					 memcpy(tx_buffer+data_len, &anchor_stamps, sizeof(anchor_stamps));
 
-  					 memcpy(tx_buffer+2, &anchor_stamps, sizeof(anchor_stamps));
-
-  					 HAL_Delay(DELAY_BEFORE_TX);
-  					 transmit_frame(tx_buffer, sizeof(anchor_stamps) + 4, 1);
-
-  					 anchor_stamps.t_rp = 0;
-  					 anchor_stamps.t_sr = 0;
-  					 anchor_stamps.t_rf = 0;
-  				 	 break;}
+  	  				 HAL_Delay(DELAY_BEFORE_TX);
+  	  				 transmit_frame(tx_buffer, data_len + sizeof(anchor_stamps) + 2, 1);
+  	  				 anchor_stamps.t_rp = 0;
+  	  				 anchor_stamps.t_sr = 0;
+  	  				 anchor_stamps.t_rf = 0;
+  				 }else{
+  					 debug(&huart1, "Received from unexpected source\r");
   				 }
-  			 }else{
-  				 debug(&huart1, "Frame not for us\r");
+
+  				 break;}
+  			 default:{
+  				 debug(&huart1, "Unrecognized type received\r");
+  			 	 break;}
   			 }
   		 }else{
   			 debug(&huart1, "Timed out\r");
@@ -594,18 +629,22 @@ void debug(UART_HandleTypeDef* huart, char* text){
 	HAL_UART_Transmit(huart, newline, 1, 500);
 }
 
-RangingStatus range_with_anchor(uint8_t anchor_id, AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps){
+RangingStatus range_with_anchor(uint8_t anchor_id, AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps, uint8* seq_num){
 	uint8 tx_buf[FRAME_LEN_MAX];
 	uint8 rx_buf[FRAME_LEN_MAX];
+	uint8 data_len;
+	uint16 new_src_addr;
+	uint16 new_src_panid;
+	uint16 new_seq_num;
 	TxStatus tx_status;
 	int rcv_len = -1;
 
 	// ----- SEND POLL -----
-	tx_buf[0] = anchor_id;
-	tx_buf[1] = POLL;
+	data_len = make_mac_header(tx_buf, anchor_id, anchor_id, *seq_num);
+	tx_buf[data_len++] = POLL;
 	HAL_Delay(DELAY_BEFORE_TX);
 
-	tx_status = transmit_frame(tx_buf, 4, 1);
+	tx_status = transmit_frame(tx_buf, data_len + 2, 1); 	// data_len + 2 to account for checksum
 
 	if(!(tx_status == TX_SUCCESS)){
 		return SEND_POLL_FAILED;
@@ -614,39 +653,58 @@ RangingStatus range_with_anchor(uint8_t anchor_id, AnchorTimeStamps* a_stamps, B
 
 	// ----- RECEIVE RESPONSE -----
 	rcv_len = receive_frame(rx_buf, FRAME_LEN_MAX, 1000);
-	if(rcv_len < 0){
+	if(rcv_len <= 0){
 		debug(&huart1, "No frame received\r");
 		return RECEIVE_RESPONSE_FAILED;
 	}
-	if(rx_buf[0] != anchor_id || rx_buf[1] != RESPONSE_INIT){
+	new_src_addr 	= get_src_addr(rx_buf);
+	new_src_panid 	= get_src_panid(rx_buf);
+	new_seq_num 	= get_seq_number(rx_buf);
+	if(new_src_addr != anchor_id || new_src_panid != anchor_id){
+		debug(&huart1, "Received from unexpected source\r");
+		return RECEIVE_RESPONSE_FAILED;
+	}
+	if(rx_buf[MAC_SIZE_EXPECTED] != RESPONSE_INIT){
 		debug(&huart1, "Frame didn't contain the right numbers\r");
 		return RECEIVE_RESPONSE_FAILED;
 	}
+
+	*seq_num = get_seq_number(rx_buf);
 	b_stamps->t_rr = get_rx_timestamp();
 
 	// ----- SEND FINAL -----
-	tx_buf[1] = SEND_FINAL;
+	data_len = make_mac_header(tx_buf, anchor_id, anchor_id, ++(*seq_num));
+	tx_buf[data_len++] = SEND_FINAL;
 	HAL_Delay(DELAY_BEFORE_TX);
 
-	tx_status = transmit_frame(tx_buf, 4, 1);
+	tx_status = transmit_frame(tx_buf, data_len + 2, 1);
 
 	if(!(tx_status == TX_SUCCESS)){
 			return SEND_FINAL_FAILED;
 	}
+
 	b_stamps->t_sf = get_tx_timestamp();
 
 	// ----- RECEIVE TIMESTAMPS -----
 	rcv_len = receive_frame(rx_buf, FRAME_LEN_MAX, 1000);
-	if(rcv_len < 0){
+	if(rcv_len <= 0){
 		debug(&huart1, "No timestamps frame received\r");
 		return RECEIVE_TIMESTAMPS_FAILED;
 	}
-	b_stamps->t_ff = get_rx_timestamp();
-	if(rx_buf[0] != anchor_id || rx_buf[1] != RESPONSE_DATA){
-		debug(&huart1, "Timestamps frame didn't contain the right numbers\r");
-		return RECEIVE_RESPONSE_FAILED;
+	new_src_addr 	= get_src_addr(rx_buf);
+	new_src_panid 	= get_src_panid(rx_buf);
+	new_seq_num 	= get_seq_number(rx_buf);
+	if(new_src_addr != anchor_id || new_src_panid != anchor_id){
+		debug(&huart1, "Received timestamps from unexpected source\r");
+		return RECEIVE_TIMESTAMPS_FAILED;
 	}
-	memcpy(a_stamps, rx_buf+2, sizeof(*a_stamps));
+	*seq_num = get_seq_number(rx_buf);
+	b_stamps->t_ff = get_rx_timestamp();
+	if(rx_buf[MAC_SIZE_EXPECTED] != RESPONSE_DATA){
+		debug(&huart1, "Timestamps frame didn't contain the right numbers\r");
+		return RECEIVE_TIMESTAMPS_FAILED;
+	}
+	memcpy(a_stamps, rx_buf+MAC_SIZE_EXPECTED+1, sizeof(*a_stamps));
 
 	return RANGING_SUCCESS;
 }
@@ -669,6 +727,7 @@ int receive_frame(uint8* buffer, int max_len, int timeout){
 	uint16 frame_len = 0;
 
 	int count = 0;
+	timeout = timeout * 5; // convert milliseconds to 200's of uSeconds
 
 	dwt_rxenable(DWT_START_RX_IMMEDIATE); /* Activate reception immediately. See NOTE 3 below. */
 
@@ -677,7 +736,8 @@ int receive_frame(uint8* buffer, int max_len, int timeout){
 	 * function to access it. */
 	while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG | SYS_STATUS_ALL_RX_ERR)) && !(count >= timeout))
 	{
-		HAL_Delay(1);
+//		HAL_Delay(1);
+		usleep(200);
 		count++;
 	};
 
@@ -695,11 +755,16 @@ int receive_frame(uint8* buffer, int max_len, int timeout){
 
 		return frame_len;
 	}
-	else
+	else if(count >= timeout)
 	{
+		dwt_forcetrxoff(); // guarantee that the receiver is off
+		return -1;
+	}else{
 		/* Clear RX error events in the DW1000 status register. */
 		dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
-		dwt_forcetrxoff(); // guarantee that the receiver is of
+
+		/* Reset RX to properly reinitialise LDE operation. */
+		dwt_rxreset();
 		return -1;
 	}
 }
