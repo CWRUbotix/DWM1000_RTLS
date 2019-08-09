@@ -43,7 +43,7 @@ typedef struct {
 	uint8_t type;
 	uint8_t anchor_id;
 	float distance;
-	uint16_t confidence;
+	int16 confidence;
 } DistanceFrame;
 
 typedef struct {
@@ -117,6 +117,11 @@ TxStatus transmit_frame(uint8* frame, int f_len, _Bool ranging);
 int receive_frame(uint8* buffer, int max_len, int timeout);
 _Bool send_CAN_update(CAN_HandleTypeDef *hcan, DistanceFrame* frame);
 int get_tof(AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps);
+double get_rx_power(dwt_rxdiag_t* diagnostics);
+double get_fp_power(dwt_rxdiag_t* diagnostics);
+double get_fp_snr(dwt_rxdiag_t* diagnostics);
+int16 get_confidence(double rx_power, double fp_power, double snr);
+void u_delay(int usec);
 
 /* USER CODE END EFP */
 

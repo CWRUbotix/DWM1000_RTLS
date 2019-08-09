@@ -55,7 +55,11 @@
 #define TX_ANT_DLY 			16442
 #define RX_ANT_DLY 			16442
 
-#define SELF_CAN_ID 		0x01
+/* weights for our confidence calculation */
+#define K1 					100.0
+#define K2 					1.0
+
+#define SELF_CAN_ID 		0x02
 
 #ifdef ANCHOR
 /* ID of this device, change to be unique in the system */
@@ -107,6 +111,10 @@ HAL_StatusTypeDef UART_status;
 HAL_StatusTypeDef CAN_status;
 
 RangingStatus 	ranging_status;
+dwt_rxdiag_t 	rx_diagnostics;
+double 			rx_power;
+double 			fp_power;
+double 			snr;
 _Bool 			CAN_Rx_OK 					= 0; //
 _Bool 			do_ranging 					= 0;
 _Bool 			dwm1000_setup_success 		= 0;
@@ -283,8 +291,13 @@ int main(void)
   					tofs[j] = get_tof(&anchor_stamps, &beacon_stamps);
   					HAL_Delay(10);
   				}
-
   				if(ranging_ok){
+  	  				dwt_readdiagnostics(&rx_diagnostics); 	// read diagnostics of the last frame
+  	  				rx_power = get_rx_power(&rx_diagnostics);
+  	  				fp_power = get_fp_power(&rx_diagnostics);
+  	  				snr 	 = get_fp_snr(&rx_diagnostics);
+  	  				anchor->confidence = get_confidence(rx_power, fp_power, snr);
+
   					int sum = 0;
   					for(int i = 0; i < SAMPLES_PER_POINT; i++){
   						sum += tofs[i];
@@ -300,7 +313,10 @@ int main(void)
   					UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
 
   					int dist_mm = (int)1000.0*dist;
-  					size = sprintf((char*)uart_buf, "DISTANCE (mm): %d\r\n", dist_mm);
+  					size = sprintf((char*)uart_buf, "DISTANCE (mm): %d\t", dist_mm);
+  					UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
+
+  					size = sprintf((char*)uart_buf, "Confidence: %d\r\n", anchor->confidence);
   					UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
 
   					anchor->type = DISTANCE_FRAME_TYPE;
@@ -737,7 +753,7 @@ int receive_frame(uint8* buffer, int max_len, int timeout){
 	while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG | SYS_STATUS_ALL_RX_ERR)) && !(count >= timeout))
 	{
 //		HAL_Delay(1);
-		usleep(200);
+		u_delay(200);
 		count++;
 	};
 
@@ -810,6 +826,32 @@ unsigned long long get_rx_timestamp(void){
     return retval;
 }
 
+double get_fp_power(dwt_rxdiag_t* diagnostics){
+	double F1 = 1.0 * diagnostics->firstPathAmp1;
+	double F2 = 1.0 * diagnostics->firstPathAmp2;
+	double F3 = 1.0 * diagnostics->firstPathAmp3;
+	double A  = 121.74; // for PRF of 64 MHz (see pg. 45 of DW1000 user manual)
+	double N  = 1.0 * diagnostics->rxPreamCount;
+
+	double retval = ( pow(F1, 2.0) + pow(F2, 2.0) + pow(F3, 2.0) ) / pow(N, 2.0);
+	return 10.0 * log10(retval) - A;
+}
+double get_rx_power(dwt_rxdiag_t* diagnostics){
+	double C = 1.0 * diagnostics->maxGrowthCIR;
+	double A  = 121.74; // for PRF of 64 MHz (see pg. 45 of DW1000 user manual)
+	double N  = 1.0 * diagnostics->rxPreamCount;
+
+	return 10.0 * log10( (C * pow(2.0, 17.0))/ pow(N, 2.0)) - A;
+}
+double get_fp_snr(dwt_rxdiag_t* diagnostics){
+	return (double)(1.0 * diagnostics->firstPathAmp2) / (1.0 * diagnostics->stdNoise);
+}
+
+int16 get_confidence(double rx_pwr, double fp_pwr, double SNR){
+	double conf = K1*(6 - rx_pwr + fp_pwr) + K2*SNR;
+	return (int16) conf;
+}
+
 
 _Bool send_CAN_update(CAN_HandleTypeDef *hcan, DistanceFrame* frame){
 	CAN_TxHeaderTypeDef hddr;
@@ -829,6 +871,81 @@ _Bool send_CAN_update(CAN_HandleTypeDef *hcan, DistanceFrame* frame){
 	retval = HAL_CAN_AddTxMessage(hcan, &hddr, data, &mailbox);
 
 	return retval == HAL_OK;
+}
+
+void u_delay(int usec){
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
+	__NOP();
 }
 
 /* USER CODE END 4 */
