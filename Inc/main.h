@@ -35,6 +35,9 @@ extern "C" {
 #include <inttypes.h>
 #include "deca_types.h"
 #include "deca_mac.h"
+#include "eepromConfig.h"
+#include "eeprom.h"
+#include "string.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -116,7 +119,7 @@ unsigned long long get_rx_timestamp(void);
 TxStatus transmit_frame(uint8* frame, int f_len, _Bool ranging);
 int receive_frame(uint8* buffer, int max_len, int timeout);
 _Bool send_CAN_update(CAN_HandleTypeDef *hcan, DistanceFrame* frame);
-int get_tof(AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps);
+int64_t get_tof(AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps);
 double get_rx_power(dwt_rxdiag_t* diagnostics);
 double get_fp_power(dwt_rxdiag_t* diagnostics);
 double get_fp_snr(dwt_rxdiag_t* diagnostics);

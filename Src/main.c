@@ -49,7 +49,7 @@
 
 #define SAMPLES_PER_POINT 	3
 /* Change to match the device you're programming */
-#define XTAL_TRIM 			14
+#define XTAL_TRIM 			15
 
 /* Change to match which device you're programming */
 #define TX_ANT_DLY 			16442
@@ -59,7 +59,7 @@
 #define K1 					100.0
 #define K2 					1.0
 
-#define SELF_CAN_ID 		0x02
+#define SELF_CAN_ID 		0x03
 
 #ifdef ANCHOR
 /* ID of this device, change to be unique in the system */
@@ -186,6 +186,8 @@ int main(void)
   MX_USB_PCD_Init();
   /* USER CODE BEGIN 2 */
 
+
+
 #ifdef BEACON
   /* Enable CAN interrupt */
 //    HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
@@ -229,20 +231,45 @@ int main(void)
   	/* Configure DW1000. See NOTE 3 below. */
   	dwt_configure(&config);
 
-  	/* XTAL Trim */
-  	dwt_setxtaltrim(XTAL_TRIM);
-  	uCurrentTrim_val = dwt_getxtaltrim();
-
-  	size = sprintf((char*)uart_buf, "XTAL trim val: %d\r\n", uCurrentTrim_val);
-  	UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
-
-
     dwt_setrxantennadelay(RX_ANT_DLY);
     dwt_settxantennadelay(TX_ANT_DLY);
 
-
+    /* EEPROM stuff */
+//    HAL_FLASH_Unlock();
+//    uint32_t eeprom_data;
+//    EE_Read(0, &eeprom_data);
+//    if (eeprom_data == EEPROM_FLAG){
+//    	// read from "EEPROM"
+//    	EE_Read(1, &eeprom_data);
+//    	uCurrentTrim_val = eeprom_data;
+//    	EE_Read(2, &eeprom_data);
+//    	self_pan_id = eeprom_data;
+//    	EE_Read(3, &eeprom_data);
+//    	self_address = eeprom_data;
+//    	debug(&huart1, "Read from emulated EEPROM\r");
+//    }else{
+//    	/* set parameters to the programmed value and write them to "EEPROM" */
+//    	self_pan_id 	= SELF_ID;
+//    	self_address 	= SELF_ID;
+//    	uCurrentTrim_val= XTAL_TRIM;
+//        EE_Format();
+//        EE_Write(0, EEPROM_FLAG);
+//        EE_Write(1, (uint32_t) uCurrentTrim_val);
+//        EE_Write(2, (uint32_t) self_pan_id);
+//        EE_Write(3, (uint32_t) self_address);
+//    	debug(&huart1, "Wrote to emulated EEPROM\r");
+//    }
     self_pan_id 	= SELF_ID;
     self_address 	= SELF_ID;
+    uCurrentTrim_val= XTAL_TRIM;
+
+    size = sprintf((char*)uart_buf, "XTAL trim:\t%d\r\nPAN ID:\t%d\r\nADDR:\t%d\r\n", uCurrentTrim_val, self_pan_id, self_address);
+  	UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
+
+  	/* set XTAL Trim */
+    dwt_setxtaltrim(uCurrentTrim_val);
+
+    /* Frame Filtering stuff */
     dwt_setpanid(self_pan_id);
     dwt_setaddress16(self_address);	// why not just have ADDRESS == PAN_ID ?
 
@@ -279,18 +306,21 @@ int main(void)
 
   			for (int i = 0; i < NUMBER_OF_ANCHORS; i++){
   				DistanceFrame* anchor = &(anchors[i]);
-  				int tofs[SAMPLES_PER_POINT];
+  				int64_t tofs[SAMPLES_PER_POINT];
   				_Bool ranging_ok = 1;
 
-  				for(int j = 0; j < SAMPLES_PER_POINT; j++){
+  				// attempt to gather SAMPLES_PER_POINT many samples
+  				int samples;
+  				for(samples = 0; samples < SAMPLES_PER_POINT; samples++){
   					ranging_status = range_with_anchor(anchor->anchor_id, &anchor_stamps, &beacon_stamps, &sequence_num);
   					if(ranging_status != RANGING_SUCCESS){
   						ranging_ok = 0;
   						break;
   					}
-  					tofs[j] = get_tof(&anchor_stamps, &beacon_stamps);
+  					tofs[samples] = get_tof(&anchor_stamps, &beacon_stamps);
   					HAL_Delay(10);
   				}
+  				// as long as we have at least 1 sample, transmit this point
   				if(ranging_ok){
   	  				dwt_readdiagnostics(&rx_diagnostics); 	// read diagnostics of the last frame
   	  				rx_power = get_rx_power(&rx_diagnostics);
@@ -298,11 +328,11 @@ int main(void)
   	  				snr 	 = get_fp_snr(&rx_diagnostics);
   	  				anchor->confidence = get_confidence(rx_power, fp_power, snr);
 
-  					int sum = 0;
-  					for(int i = 0; i < SAMPLES_PER_POINT; i++){
+  					int64_t sum = 0;
+  					for(int i = 0; i < samples; i++){
   						sum += tofs[i];
   					}
-  					int tof 	= sum / SAMPLES_PER_POINT;
+  					int tof 	= (int)(sum / samples);
 
   					float dist 	= 299792458.0 * (1.0*tof / (128.0*499200000.0));
 
@@ -350,6 +380,7 @@ int main(void)
 
   		 int rcv_len = receive_frame(rx_buffer, FRAME_LEN_MAX, 500);
   		 if(rcv_len > 0){
+  			 HAL_GPIO_WritePin(GPIOB, CAN_OK_LED_Pin, GPIO_PIN_SET);
   			 switch(rx_buffer[MAC_SIZE_EXPECTED]){
   			 case POLL:{
   				 anchor_stamps.t_rp = get_rx_timestamp();
@@ -391,6 +422,7 @@ int main(void)
   				 debug(&huart1, "Unrecognized type received\r");
   			 	 break;}
   			 }
+  			 HAL_GPIO_WritePin(GPIOB, CAN_OK_LED_Pin, GPIO_PIN_RESET);
   		 }else{
   			 debug(&huart1, "Timed out\r");
   		 }
@@ -725,13 +757,20 @@ RangingStatus range_with_anchor(uint8_t anchor_id, AnchorTimeStamps* a_stamps, B
 	return RANGING_SUCCESS;
 }
 
-int get_tof(AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps){
-	int round1 	= (b_stamps->t_rr - b_stamps->t_sp);
-	int reply1 	= (a_stamps->t_sr - a_stamps->t_rp);
-	int round2 	= (a_stamps->t_rf - a_stamps->t_sr);
-	int reply2 	= (b_stamps->t_sf - b_stamps->t_rr);
+int64_t get_tof(AnchorTimeStamps* a_stamps, BeaconTimeStamps* b_stamps){
+//	int round1 	= (b_stamps->t_rr - b_stamps->t_sp);
+//	int reply1 	= (a_stamps->t_sr - a_stamps->t_rp);
+//	int round2 	= (a_stamps->t_rf - a_stamps->t_sr);
+//	int reply2 	= (b_stamps->t_sf - b_stamps->t_rr);
+//
+//	int tof 	= ((round1 - reply1) + (round2 - reply2)) / 4;
+//	return tof;
+	double round1 	= (double)((uint32)b_stamps->t_rr - (uint32)b_stamps->t_sp);
+	double reply1 	= (double)((uint32)a_stamps->t_sr - (uint32)a_stamps->t_rp);
+	double round2 	= (double)((uint32)a_stamps->t_rf - (uint32)a_stamps->t_sr);
+	double reply2 	= (double)((uint32)b_stamps->t_sf - (uint32)b_stamps->t_rr);
 
-	int tof 	= ((round1 - reply1) + (round2 - reply2)) / 4;
+	int64_t tof 		= (int64_t)( round1*round2 - reply1*reply2 )/(round1+round2+reply1+reply2);
 	return tof;
 }
 
@@ -743,7 +782,7 @@ int receive_frame(uint8* buffer, int max_len, int timeout){
 	uint16 frame_len = 0;
 
 	int count = 0;
-	timeout = timeout * 5; // convert milliseconds to 200's of uSeconds
+	timeout = timeout * 20; // convert milliseconds to 200's of uSeconds
 
 	dwt_rxenable(DWT_START_RX_IMMEDIATE); /* Activate reception immediately. See NOTE 3 below. */
 
@@ -753,7 +792,7 @@ int receive_frame(uint8* buffer, int max_len, int timeout){
 	while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG | SYS_STATUS_ALL_RX_ERR)) && !(count >= timeout))
 	{
 //		HAL_Delay(1);
-		u_delay(200);
+		u_delay(50);
 		count++;
 	};
 
