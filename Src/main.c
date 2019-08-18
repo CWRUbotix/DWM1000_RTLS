@@ -47,7 +47,7 @@
 
 #define DELAY_BEFORE_TX 	0
 
-#define SAMPLES_PER_POINT 	3
+#define SAMPLES_PER_POINT 	2
 /* Change to match the device you're programming */
 #define XTAL_TRIM 			15
 
@@ -59,15 +59,15 @@
 #define K1 					100.0
 #define K2 					1.0
 
-#define SELF_CAN_ID 		0x03
+/* CAN ID, change to desired value if flashing for the first time */
+#define SELF_CAN_ID 		0x01
 
 #ifdef ANCHOR
-/* ID of this device, change to be unique in the system */
-#define SELF_ID 			0x33
+/* ID of this device, change to desired value if flashing for the first time */
+#define SELF_ID 			0x11
 #endif
 
 #ifdef BEACON
-
 /* ID of this device will be the CAN bus id, because why not */
 #define SELF_ID 			SELF_CAN_ID
 #endif
@@ -189,27 +189,28 @@ int main(void)
 
 
 #ifdef BEACON
-  /* Enable CAN interrupt */
+    /* Enable CAN interrupt */
 //    HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
-  CAN_FilterTypeDef  can_filter;
-  can_filter.FilterFIFOAssignment = CAN_RX_FIFO0;
-  can_filter.FilterMode = CAN_FILTERMODE_IDMASK;
-  can_filter.FilterScale = CAN_FILTERSCALE_32BIT;
-  can_filter.FilterIdHigh = 0x0000;
-  can_filter.FilterIdLow = 0x0000;
-  can_filter.FilterMaskIdHigh = 0x0000;
-  can_filter.FilterMaskIdLow = 0x0000;
-  can_filter.FilterBank = 0;
-  can_filter.FilterActivation = CAN_FILTER_ENABLE;
+    CAN_FilterTypeDef  can_filter;
+    can_filter.FilterFIFOAssignment = CAN_RX_FIFO0;
+    can_filter.FilterMode = CAN_FILTERMODE_IDMASK;
+    can_filter.FilterScale = CAN_FILTERSCALE_32BIT;
+    can_filter.FilterIdHigh = 0x0000;
+    can_filter.FilterIdLow = 0x0000;
+    can_filter.FilterMaskIdHigh = 0x0000;
+    can_filter.FilterMaskIdLow = 0x0000;
+    can_filter.FilterBank = 0;
+    can_filter.FilterActivation = CAN_FILTER_ENABLE;
 
-  HAL_CAN_ConfigFilter(&hcan, &can_filter);
-  /* Start the CAN Module */
+    HAL_CAN_ConfigFilter(&hcan, &can_filter);
+    /* Start the CAN Module */
     HAL_CAN_Start(&hcan);
 
-    for (int i = 0; i< NUMBER_OF_ANCHORS; i++) {
-    	anchors[i].anchor_id = ((i+1) << 4) | (i+1);
-    	anchors[i].distance = -1.0;
-    }
+    /* Setup anchor ID's, our system has 3 */
+    anchors[0].anchor_id = 0x11;
+    anchors[1].anchor_id = 0x22;
+    anchors[2].anchor_id = 0x33;
+
 #endif
 
 	/* Reset and initialise DW1000. See NOTE 2 below.
@@ -235,39 +236,32 @@ int main(void)
     dwt_settxantennadelay(TX_ANT_DLY);
 
     /* EEPROM stuff */
-//    HAL_FLASH_Unlock();
-//    uint32_t eeprom_data;
-//    EE_Read(0, &eeprom_data);
-//    if (eeprom_data == EEPROM_FLAG){
-//    	// read from "EEPROM"
-//    	EE_Read(1, &eeprom_data);
-//    	uCurrentTrim_val = eeprom_data;
-//    	EE_Read(2, &eeprom_data);
-//    	self_pan_id = eeprom_data;
-//    	EE_Read(3, &eeprom_data);
-//    	self_address = eeprom_data;
-//    	debug(&huart1, "Read from emulated EEPROM\r");
-//    }else{
-//    	/* set parameters to the programmed value and write them to "EEPROM" */
-//    	self_pan_id 	= SELF_ID;
-//    	self_address 	= SELF_ID;
-//    	uCurrentTrim_val= XTAL_TRIM;
-//        EE_Format();
-//        EE_Write(0, EEPROM_FLAG);
-//        EE_Write(1, (uint32_t) uCurrentTrim_val);
-//        EE_Write(2, (uint32_t) self_pan_id);
-//        EE_Write(3, (uint32_t) self_address);
-//    	debug(&huart1, "Wrote to emulated EEPROM\r");
-//    }
-    self_pan_id 	= SELF_ID;
-    self_address 	= SELF_ID;
-    uCurrentTrim_val= XTAL_TRIM;
+    HAL_FLASH_Unlock();
+    uint32_t eeprom_data;
+    EE_Read(0, &eeprom_data);
+    if (eeprom_data == EEPROM_FLAG){
+    	// read from "EEPROM"
+    	EE_Read(1, &eeprom_data);
+    	self_pan_id = eeprom_data;
+    	EE_Read(2, &eeprom_data);
+    	self_address = eeprom_data;
+    	debug(&huart1, "Read from emulated EEPROM\r");
+    }else{
+    	/* set parameters to the programmed value and write them to "EEPROM" */
+    	self_pan_id 	= SELF_ID;
+    	self_address 	= SELF_ID;
+        EE_Format();
+        EE_Write(0, EEPROM_FLAG);
+        EE_Write(1, (uint32_t) self_pan_id);
+        EE_Write(2, (uint32_t) self_address);
+    	debug(&huart1, "Wrote to emulated EEPROM\r");
+    }
+    HAL_FLASH_Lock();
+
+    uCurrentTrim_val= dwt_getinitxtaltrim();
 
     size = sprintf((char*)uart_buf, "XTAL trim:\t%d\r\nPAN ID:\t%d\r\nADDR:\t%d\r\n", uCurrentTrim_val, self_pan_id, self_address);
   	UART_status = HAL_UART_Transmit(&huart1, uart_buf, size, 500);
-
-  	/* set XTAL Trim */
-    dwt_setxtaltrim(uCurrentTrim_val);
 
     /* Frame Filtering stuff */
     dwt_setpanid(self_pan_id);
@@ -782,7 +776,7 @@ int receive_frame(uint8* buffer, int max_len, int timeout){
 	uint16 frame_len = 0;
 
 	int count = 0;
-	timeout = timeout * 20; // convert milliseconds to 200's of uSeconds
+	timeout = timeout * 20; // convert milliseconds to 50's of uSeconds
 
 	dwt_rxenable(DWT_START_RX_IMMEDIATE); /* Activate reception immediately. See NOTE 3 below. */
 
